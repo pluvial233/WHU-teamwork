@@ -94,8 +94,8 @@ INDEX_HTML = '''<!DOCTYPE html>
     </div>
     
     <div class="nav">
-        <a href="{{ url_for('login') }}" class="btn">用户登录</a>
-        <a href="{{ url_for('login') }}" class="btn">管理员登录</a>
+        <a href="{{ url_for('login', role='user') }}" class="btn">用户登录</a>
+        <a href="{{ url_for('login', role='admin') }}" class="btn">管理员登录</a>
     </div>
     
     <div class="feature-section">
@@ -209,8 +209,8 @@ LOGIN_HTML = '''<!DOCTYPE html>
 </head>
 <body>
     <div class="login-container">
-        <h2>用户登录</h2>
-        <form method="POST" action="{{ url_for('login') }}">
+        <h2>{% if request.args.get('role') == 'admin' %}管理员登录{% else %}用户登录{% endif %}</h2>
+        <form method="POST" action="{{ url_for('login', role=request.args.get('role', 'user')) }}">
             <div class="form-group">
                 <label for="username">用户名</label>
                 <input type="text" id="username" name="username" required>
@@ -236,6 +236,11 @@ def login():
         password = request.form['password']
         user = User.query.filter_by(username=username, password=password).first()
         if user:
+            # 验证角色与登录入口是否匹配
+            requested_role = request.args.get('role', 'user')
+            if user.role != requested_role:
+                role_name = '管理员' if requested_role == 'admin' else '用户'
+                return render_template_string(LOGIN_HTML, error=f'该账号不是{role_name}账号，请使用正确入口登录')
             session['user_id'] = user.id
             session['role'] = user.role
             return redirect(url_for('dashboard'))
@@ -254,7 +259,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>用户中心 - 图书管理系统</title>
+    <title>{% if session.role == 'admin' %}管理员中心{% else %}用户中心{% endif %} - 图书管理系统</title>
     <style>
         body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }
         .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 40px; }
@@ -268,7 +273,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
 </head>
 <body class="{{ 'admin' if session.role == 'admin' else 'user' }}">
     <div class="header">
-        <h1>图书管理系统 - 用户中心</h1>
+        <h1>图书管理系统 - {% if session.role == 'admin' %}管理员中心{% else %}用户中心{% endif %}</h1>
         <div class="nav">
             <a href="{{ url_for('logout') }}" class="btn">退出登录</a>
         </div>
@@ -276,7 +281,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
     
     <div class="section">
         <h2>欢迎使用图书管理系统</h2>
-        <p>当前用户: {{ user.username }} (已登录)</p>
+        <p>当前用户: {{ user.username }} ({% if session.role == 'admin' %}管理员已登录{% else %}已登录{% endif %})</p>
         <p>用户角色: {{ session.role }}</p>
     </div>
     
@@ -360,10 +365,91 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
     
     <div class="section admin-features">
         <h3>管理员功能区</h3>
-        <p>图书入库 | 编辑图书 | 删除图书 | 数据备份</p>
+        <div id="add-book-form">
+            <h4>图书入库</h4>
+            <form method="POST" action="{{ url_for('add_book') }}">
+                <div style="margin-bottom: 10px;">
+                    <label for="title">书名:</label>
+                    <input type="text" id="title" name="title" required>
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <label for="author">作者:</label>
+                    <input type="text" id="author" name="author" required>
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <label for="category">类别:</label>
+                    <input type="text" id="category" name="category">
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <label for="isbn">ISBN:</label>
+                    <input type="text" id="isbn" name="isbn" required>
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <label for="stock">库存数量:</label>
+                    <input type="number" id="stock" name="stock" min="1" value="1" required>
+                </div>
+                <button type="submit" class="btn">添加图书</button>
+                {% if add_book_message %}
+                <p style="color: {% if add_book_success %}green{% else %}red{% endif %}">{{ add_book_message }}</p>
+                {% endif %}
+            </form>
+        </div>
+        <div id="inventory-check" style="margin-top: 30px;">
+            <h4>库存盘点</h4>
+            <table border="1" style="border-collapse: collapse; width: 100%;">
+                <tr style="background-color: #f2f2f2;">
+                    <th>ID</th>
+                    <th>书名</th>
+                    <th>作者</th>
+                    <th>类别</th>
+                    <th>ISBN</th>
+                    <th>库存数量</th>
+                </tr>
+                {% for book in all_books %}
+                <tr>
+                    <td>{{ book.id }}</td>
+                    <td>{{ book.title }}</td>
+                    <td>{{ book.author }}</td>
+                    <td>{{ book.category }}</td>
+                    <td>{{ book.isbn }}</td>
+                    <td>{{ book.stock }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
     </div>
 </body>
 </html>'''
+
+@app.route('/add_book', methods=['POST'])
+def add_book():
+    if 'user_id' not in session or session.get('role') != 'admin':
+        return redirect(url_for('login'))
+    
+    # 获取表单数据
+    title = request.form['title']
+    author = request.form['author']
+    category = request.form['category']
+    isbn = request.form['isbn']
+    stock = int(request.form['stock'])
+    
+    # 检查ISBN是否已存在
+    if Book.query.filter_by(isbn=isbn).first():
+        current_user = User.query.get(session['user_id'])
+        all_borrow_records = BorrowRecord.query.all()
+        all_books = Book.query.all()
+        return render_template_string(DASHBOARD_HTML, user=current_user, all_borrow_records=all_borrow_records, all_books=all_books, add_book_message='ISBN已存在', add_book_success=False, session=session)
+    
+    # 创建新图书
+    new_book = Book(title=title, author=author, category=category, isbn=isbn, stock=stock)
+    db.session.add(new_book)
+    db.session.commit()
+    
+    # 返回带成功消息的仪表板
+    current_user = User.query.get(session['user_id'])
+    all_borrow_records = BorrowRecord.query.all()
+    all_books = Book.query.all()
+    return render_template_string(DASHBOARD_HTML, user=current_user, all_borrow_records=all_borrow_records, all_books=all_books, add_book_message='图书添加成功', add_book_success=True, session=session)
 
 @app.route('/dashboard')
 def dashboard():
@@ -375,9 +461,10 @@ def dashboard():
     
     # 根据角色获取不同数据
     if session['role'] == 'admin':
-        # 管理员可以查看所有借阅记录
+        # 管理员可以查看所有借阅记录和图书库存
         all_borrow_records = BorrowRecord.query.all()
-        return render_template_string(DASHBOARD_HTML, user=current_user, all_borrow_records=all_borrow_records, session=session)
+        all_books = Book.query.all()
+        return render_template_string(DASHBOARD_HTML, user=current_user, all_borrow_records=all_borrow_records, all_books=all_books, session=session)
     else:
         # 普通用户只能查看自己的借阅记录
         user_borrow_records = BorrowRecord.query.filter_by(user_id=session['user_id']).all()
